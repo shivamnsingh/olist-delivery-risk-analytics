@@ -1,100 +1,286 @@
-# Olist Sentinel: E-Commerce Performance and Delivery Risk Analytics
 
-Predicting which orders are likely to arrive late, using the public Olist Brazilian e-commerce dataset (9 relational tables, about 100,000 orders).
+# Olist E-commerce Delivery Risk & Customer Experience Analytics
 
-## The problem
+An end-to-end analytics project on the public Olist Brazilian e-commerce dataset. It combines KPI reporting, a leakage-aware late-delivery risk model, review-score diagnostics, and Portuguese review text mining to answer one question: **where do deliveries go wrong, and what does it cost in customer experience?**
 
-About 8% of delivered orders arrive after the delivery date promised to the customer. An operations team cannot check every order, so this project ranks orders by late-delivery risk and measures how many late orders are found if only the riskiest 10% are reviewed.
+![Olist ER Diagram](<Olist%20E-commerce%20ER%20Diagram.png>)
 
-## Main result
+---
 
-| Measure | Result |
-|---|---|
-| Delivered orders analysed | 96,470 |
-| Late-delivery rate | 8.11% (7,826 late orders) |
-| Best model | Logistic regression |
-| Average PR-AUC lift over random ranking | 2.00x (5 rolling time-based test windows) |
-| Late orders found in the riskiest 10% of orders | about 23% (random selection finds about 10%) |
+## Key Results
 
-Logistic regression performed slightly better than XGBoost on average, on both the rolling backtest and the final holdout. "Lift" is the model's precision-recall score divided by the late rate, so 1.0x means no better than random.
+| Area                                    | Result                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Delivered orders analysed               | 96,470 (8.1% arrived late)                                                                             |
+| On-time delivery rate                   | 91.89%                                                                                                 |
+| Average review score                    | 4.09 / 5                                                                                               |
+| Customer repeat rate                    | 3.12%                                                                                                  |
+| Average order value                     | R$160.99                                                                                               |
+| Peak monthly late rate                  | 21.4% (Mar 2018), 16.0% (Feb 2018)                                                                     |
+| Review score, on-time vs late           | 4.29 vs 2.57 (gap of 1.73 points)                                                                      |
+| Seller concentration                    | Top 10% of sellers account for 73% of late orders                                                      |
+| Late-risk model (rolling backtest)      | Logistic regression: 2.00x PR-AUC lift, 23% of late orders captured in the riskiest 10% (random = 10%) |
+| Late-risk model (chronological holdout) | Logistic regression: 1.76x lift, 20.7% top-10% capture; XGBoost: 1.39x lift, 15.8%                     |
+| Negative review classifier              | 0.92 accuracy, 0.867 F1 and 0.92 recall on the negative class                                          |
+| Negative review themes                  | Delivery-related keywords appear in 5,780 of 10,889 negative reviews (53.08%)                          |
 
-### Rolling backtest (train on the past, test on the next 2 months)
+---
 
-| Test window | Late rate | Logistic lift | XGBoost lift | Logistic top-10% capture | XGBoost top-10% capture |
-|---|---:|---:|---:|---:|---:|
-| from 2017-10 | 11% | 1.37 | 1.26 | 17% | 15% |
-| from 2017-12 | 7% | 1.34 | 1.60 | 16% | 18% |
-| from 2018-02 | 19% | 1.68 | 1.56 | 20% | 18% |
-| from 2018-04 | 7% | 2.43 | 2.17 | 29% | 26% |
-| from 2018-06 | 3% | 3.18 | 3.23 | 31% | 26% |
-| **Average** | **9%** | **2.00** | **1.97** | **23%** | **21%** |
+## Notebooks
 
-Performance is strongest in calm periods and weakest during disruption months, because one-off events are hard to predict from order details.
+| Notebook                                       | Purpose                                                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `basic.ipynb`                                | Dataset inventory: file list, row counts, schemas, and table grain                                 |
+| `olist_ecommerce_performance_analysis.ipynb` | KPI scorecard, monthly revenue and late-rate trends, review vs delivery link, seller concentration |
+| `late_delivery_prediction.ipynb`             | Late-delivery risk model: feature engineering, rolling backtest, holdout, SHAP, seller drill-down  |
+| `review_text_classification.ipynb`           | TF-IDF sentiment classifier and NMF complaint-theme modelling on Portuguese reviews                |
 
-### Final holdout (train on the earliest 80% of orders, test on the latest 20%)
-
-| Model | Lift | Top-10% capture | Top-10% precision |
-|---|---:|---:|---:|
-| Logistic regression | 1.76 | 20.7% | 10.9% |
-| XGBoost | 1.39 | 15.8% | 8.3% |
-
-## Key findings from the analysis
-
-- The late rate swings strongly by month, from 1.4% in June 2018 to a peak of 21.4% in March 2018, so lateness is driven largely by time-specific events.
-- On-time delivery rate across delivered orders: 91.89%.
-- Because month-to-month swings dominate, the calendar month was deliberately **not** used as a feature (the data covers under two years, so the model would only memorise specific months).
+---
 
 ## Approach
 
-1. **Target:** `is_late = 1` if the delivery date is after the estimated delivery date. Only delivered orders with a known delivery date are used.
-2. **One row per order:** items are aggregated (total price, total freight, item count) and joined to customer, seller and product details.
-3. **Features (13), all known at purchase time:**
-   - Order and product: purchase hour, day of week, price, freight, item count, product weight, product volume, promised delivery days
-   - Geography: shipping distance between seller and customer (haversine on average zip-prefix coordinates) and a same-state flag
-   - History: the seller's past late rate and order count, and the platform's recent late rate over the last 1,000 delivered orders
-4. **Avoiding leakage:** history features are joined backwards in time, so an order only sees orders already delivered before its own purchase time. Every test set is later in time than its training set.
-5. **Evaluation:** a rolling time-based backtest and a chronological holdout, using lift and top-10% capture instead of accuracy, because only about 8% of orders are late.
-6. **Models:** class-balanced logistic regression (baseline) and a deliberately small, regularised XGBoost.
-7. **Explanation:** SHAP summary plot for the XGBoost model.
+### 1. Data inventory
 
-## Project structure
+Nine CSV files (customers, geolocation, orders, order items, payments, reviews, products, sellers, category translation). Row counts and schemas are checked first because the tables sit at different grains and must be aggregated before joining.
 
-```
-olist-delivery-risk-analytics/
-  data/              the 9 Olist CSV files (not included in the repo)
-  ipynb_files/
-    late_delivery_prediction.ipynb   main model, backtest and SHAP
-    code.ipynb                       business KPIs and monthly analysis
-    basic.ipynb                      first exploration
-  data_overview.md   column inventory of the tables
-  requirements.txt
-  README.md
-```
+### 2. Delivery outcome
 
-## How to run
+An order is **late** when the customer delivery date is after the estimated delivery date. Only delivered orders with a recorded delivery timestamp are used. `delay_days` is kept for analysis only and is never used as a model feature.
 
-1. Download the dataset from Kaggle ("Brazilian E-Commerce Public Dataset by Olist") and put the CSV files in a folder named `data/` at the top of the project.
-2. Install the libraries: `pip install -r requirements.txt`
-3. Open `ipynb_files/late_delivery_prediction.ipynb` in Jupyter or VS Code and choose Run All.
+### 3. Late-delivery risk model
 
-The notebooks read the data from `../data`, so keep the folder layout above.
+Framed as a **risk-ranking problem**: which orders should operations review first?
+
+- **One row per order:** item rows are aggregated (price and freight summed, item count), then joined to customer, seller, and product data. For multi-item orders, the first seller and product are used.
+- **Features:** purchase hour and weekday, freight, price, item count, product weight and volume, seller-to-customer haversine distance, same-state flag, promised delivery days, seller historical late rate and order count, and a rolling platform-wide late rate.
+- **Leakage controls:** seller and platform history are built with `merge_asof` (backward, no exact matches), so only previously delivered orders contribute. `month` is deliberately excluded because under two years of data would let the model memorise specific months.
+- **Evaluation:** a rolling time-based backtest (five two-month windows) plus a chronological 80/20 holdout. Metrics are PR-AUC lift and top-decile capture, since accuracy is uninformative at an 8% positive rate.
+- **Models:** class-weighted logistic regression (baseline) vs regularised XGBoost, with SHAP used to interpret the XGBoost model.
+
+### 4. Performance and experience diagnostics
+
+KPI scorecard (revenue, AOV, on-time rate, review score, repeat rate), monthly late-rate trend, review score comparison for late vs on-time orders, and seller-level concentration of late orders.
+
+### 5. Review text mining
+
+- 40,950 Portuguese reviews with comments; neutral 3-star reviews excluded; scores 1-2 labelled negative.
+- TF-IDF (unigrams and bigrams, Portuguese stop words, `min_df=5`) with class-balanced logistic regression on a stratified 80/20 split.
+- NMF (6 components) on negative reviews to surface complaint themes: non-receipt, delays, missing items, and defective or wrong products.
+
+---
+
+## Model Results
+
+**Rolling backtest (average across 5 windows)**
+
+| Model               | PR-AUC lift | Top-10% capture |
+| ------------------- | ----------- | --------------- |
+| Logistic regression | 2.00x       | 23%             |
+| XGBoost             | 1.97x       | 21%             |
+
+**Chronological holdout (late rate 5.3%)**
+
+| Model               | PR-AUC lift | Top-10% capture | Top-10% precision |
+| ------------------- | ----------- | --------------- | ----------------- |
+| Logistic regression | 1.76x       | 20.7%           | 10.9%             |
+| XGBoost             | 1.39x       | 15.8%           | 8.3%              |
+
+The signal is real but moderate: roughly 2x better than random ranking. The simpler logistic regression performed better than XGBoost on this data.
+
+---
 
 ## Limitations
 
-- Orders with several items use the first seller and first product only.
-- Distance is based on zip-prefix averages, not exact addresses, and the duplicate rows in the geolocation table were not removed.
-- Only delivered orders are used, so canceled and unfinished orders are not covered.
-- The backtest windows share training data, there are no confidence intervals, and no statistical test compares the two models.
-- The SHAP plot explains the XGBoost model, which is not the best-performing model.
-- This is a ranking and prioritisation result only. No intervention was tested, so the project does not measure reduced late deliveries, cost savings or customer-satisfaction gains.
+- Findings are **associations, not causal effects**. No intervention was tested, so no cost savings or reduction in late deliveries is claimed.
+- Seller concentration is based on **late-order counts, not rates**, so high-volume sellers rank high partly due to volume.
+- Delivery distance uses **zip-prefix average coordinates**, not exact addresses.
+- Multi-item orders use only the **first seller and product**.
+- The delivery-complaint share is **keyword-based** and may overcount; a single review can mention several issues.
+- In the backtest, training orders purchased before a cutoff may have been delivered after it, so the pipeline is best described as leakage-aware rather than leakage-proof.
 
-## Possible next steps
+---
 
-- Feature-group ablation to measure how much seller history, distance and promised days each contribute.
-- Compare capture at the top 5%, 10% and 20% of orders.
-- Explain the logistic regression model directly with standardised coefficients.
-- Test a real intervention (for example expedited handling) before claiming business impact.
+## Tech Stack
 
-## Tools
+Python, pandas, NumPy, scikit-learn, XGBoost, SHAP, NLTK, matplotlib, Jupyter.
 
-Python, pandas, NumPy, scikit-learn, XGBoost, SHAP, matplotlib, Jupyter.
+---
+
+## Getting Started
+
+```bash
+git clone <your-repo-url>
+cd olist-delivery-risk-analytics
+pip install -r requirements.txt
+```
+
+1. Download the [Olist Brazilian E-Commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) from Kaggle and place the CSV files in the `data/` folder.
+2. Open the notebooks in `ipynb_files/` and run them in this order:
+   1. `basic.ipynb`
+   2. `olist_ecommerce_performance_analysis.ipynb`
+   3. `late_delivery_prediction.ipynb`
+   4. `review_text_classification.ipynb`
+      NLTK Portuguese stop words are downloaded automatically by the text classification notebook.
+
+---
+
+## Project Structure
+
+```
+olist-delivery-risk-analytics/
+├── data/                              # Olist CSV files
+├── ipynb_files/                       # Analysis notebooks
+├── Olist E-commerce ER Diagram.png    # Dataset entity-relationship diagram
+├── requirements.txt                   # Python dependencies
+├── .gitattributes
+└── README.md
+```
+
+---
+
+## Dataset
+
+[Olist Brazilian E-Commerce Public Dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) (Kaggle): roughly 100K orders placed between 2016 and 2018. Refer to the Kaggle page for licence terms.
+
+# Olist E-commerce Delivery Risk & Customer Experience Analytics
+
+An end-to-end analytics project on the public Olist Brazilian e-commerce dataset. It combines KPI reporting, a leakage-aware late-delivery risk model, review-score diagnostics, and Portuguese review text mining to answer one question: **where do deliveries go wrong, and what does it cost in customer experience?**
+
+![Olist ER Diagram](<Olist%20E-commerce%20ER%20Diagram.png>)
+
+---
+
+## Key Results
+
+| Area                                    | Result                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Delivered orders analysed               | 96,470 (8.1% arrived late)                                                                             |
+| On-time delivery rate                   | 91.89%                                                                                                 |
+| Average review score                    | 4.09 / 5                                                                                               |
+| Customer repeat rate                    | 3.12%                                                                                                  |
+| Average order value                     | R$160.99                                                                                               |
+| Peak monthly late rate                  | 21.4% (Mar 2018), 16.0% (Feb 2018)                                                                     |
+| Review score, on-time vs late           | 4.29 vs 2.57 (gap of 1.73 points)                                                                      |
+| Seller concentration                    | Top 10% of sellers account for 73% of late orders                                                      |
+| Late-risk model (rolling backtest)      | Logistic regression: 2.00x PR-AUC lift, 23% of late orders captured in the riskiest 10% (random = 10%) |
+| Late-risk model (chronological holdout) | Logistic regression: 1.76x lift, 20.7% top-10% capture; XGBoost: 1.39x lift, 15.8%                     |
+| Negative review classifier              | 0.92 accuracy, 0.867 F1 and 0.92 recall on the negative class                                          |
+| Negative review themes                  | Delivery-related keywords appear in 5,780 of 10,889 negative reviews (53.08%)                          |
+
+---
+
+## Notebooks
+
+| Notebook                                       | Purpose                                                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `basic.ipynb`                                | Dataset inventory: file list, row counts, schemas, and table grain                                 |
+| `olist_ecommerce_performance_analysis.ipynb` | KPI scorecard, monthly revenue and late-rate trends, review vs delivery link, seller concentration |
+| `late_delivery_prediction.ipynb`             | Late-delivery risk model: feature engineering, rolling backtest, holdout, SHAP, seller drill-down  |
+| `review_text_classification.ipynb`           | TF-IDF sentiment classifier and NMF complaint-theme modelling on Portuguese reviews                |
+
+---
+
+## Approach
+
+### 1. Data inventory
+
+Nine CSV files (customers, geolocation, orders, order items, payments, reviews, products, sellers, category translation). Row counts and schemas are checked first because the tables sit at different grains and must be aggregated before joining.
+
+### 2. Delivery outcome
+
+An order is **late** when the customer delivery date is after the estimated delivery date. Only delivered orders with a recorded delivery timestamp are used. `delay_days` is kept for analysis only and is never used as a model feature.
+
+### 3. Late-delivery risk model
+
+Framed as a **risk-ranking problem**: which orders should operations review first?
+
+- **One row per order:** item rows are aggregated (price and freight summed, item count), then joined to customer, seller, and product data. For multi-item orders, the first seller and product are used.
+- **Features:** purchase hour and weekday, freight, price, item count, product weight and volume, seller-to-customer haversine distance, same-state flag, promised delivery days, seller historical late rate and order count, and a rolling platform-wide late rate.
+- **Leakage controls:** seller and platform history are built with `merge_asof` (backward, no exact matches), so only previously delivered orders contribute. `month` is deliberately excluded because under two years of data would let the model memorise specific months.
+- **Evaluation:** a rolling time-based backtest (five two-month windows) plus a chronological 80/20 holdout. Metrics are PR-AUC lift and top-decile capture, since accuracy is uninformative at an 8% positive rate.
+- **Models:** class-weighted logistic regression (baseline) vs regularised XGBoost, with SHAP used to interpret the XGBoost model.
+
+### 4. Performance and experience diagnostics
+
+KPI scorecard (revenue, AOV, on-time rate, review score, repeat rate), monthly late-rate trend, review score comparison for late vs on-time orders, and seller-level concentration of late orders.
+
+### 5. Review text mining
+
+- 40,950 Portuguese reviews with comments; neutral 3-star reviews excluded; scores 1-2 labelled negative.
+- TF-IDF (unigrams and bigrams, Portuguese stop words, `min_df=5`) with class-balanced logistic regression on a stratified 80/20 split.
+- NMF (6 components) on negative reviews to surface complaint themes: non-receipt, delays, missing items, and defective or wrong products.
+
+---
+
+## Model Results
+
+**Rolling backtest (average across 5 windows)**
+
+| Model               | PR-AUC lift | Top-10% capture |
+| ------------------- | ----------- | --------------- |
+| Logistic regression | 2.00x       | 23%             |
+| XGBoost             | 1.97x       | 21%             |
+
+**Chronological holdout (late rate 5.3%)**
+
+| Model               | PR-AUC lift | Top-10% capture | Top-10% precision |
+| ------------------- | ----------- | --------------- | ----------------- |
+| Logistic regression | 1.76x       | 20.7%           | 10.9%             |
+| XGBoost             | 1.39x       | 15.8%           | 8.3%              |
+
+The signal is real but moderate: roughly 2x better than random ranking. The simpler logistic regression performed better than XGBoost on this data.
+
+---
+
+## Limitations
+
+- Findings are **associations, not causal effects**. No intervention was tested, so no cost savings or reduction in late deliveries is claimed.
+- Seller concentration is based on **late-order counts, not rates**, so high-volume sellers rank high partly due to volume.
+- Delivery distance uses **zip-prefix average coordinates**, not exact addresses.
+- Multi-item orders use only the **first seller and product**.
+- The delivery-complaint share is **keyword-based** and may overcount; a single review can mention several issues.
+- In the backtest, training orders purchased before a cutoff may have been delivered after it, so the pipeline is best described as leakage-aware rather than leakage-proof.
+
+---
+
+## Tech Stack
+
+Python, pandas, NumPy, scikit-learn, XGBoost, SHAP, NLTK, matplotlib, Jupyter.
+
+---
+
+## Getting Started
+
+```bash
+git clone <your-repo-url>
+cd olist-delivery-risk-analytics
+pip install -r requirements.txt
+```
+
+1. Download the [Olist Brazilian E-Commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) from Kaggle and place the CSV files in the `data/` folder.
+2. Open the notebooks in `ipynb_files/` and run them in this order:
+   1. `basic.ipynb`
+   2. `olist_ecommerce_performance_analysis.ipynb`
+   3. `late_delivery_prediction.ipynb`
+   4. `review_text_classification.ipynb`
+      NLTK Portuguese stop words are downloaded automatically by the text classification notebook.
+
+---
+
+## Project Structure
+
+```
+olist-delivery-risk-analytics/
+├── data/                              # Olist CSV files
+├── ipynb_files/                       # Analysis notebooks
+├── Olist E-commerce ER Diagram.png    # Dataset entity-relationship diagram
+├── requirements.txt                   # Python dependencies
+├── .gitattributes
+└── README.md
+```
+
+---
+
+## Dataset
+
+[Olist Brazilian E-Commerce Public Dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) (Kaggle): roughly 100K orders placed between 2016 and 2018. Refer to the Kaggle page for licence terms.
