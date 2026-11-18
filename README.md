@@ -283,4 +283,4 @@ olist-delivery-risk-analytics/
 
 ## Dataset
 
-[Olist Brazilian E-Commerce Public Dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) (Kaggle): roughly 100K orders placed between 2016 and 2018. Refer to the Kaggle page for licence terms.
+[Olist Brazilian E-Commerce Public Dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) (Kaggle): roughly 100K orders placed between 2016 and 2018. Refer to the Kaggle page for licence terms
